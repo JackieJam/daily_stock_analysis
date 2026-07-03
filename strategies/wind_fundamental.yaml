@@ -1,0 +1,43 @@
+name: wind_fundamental
+display_name: Wind 基本面分析
+description: Wind 数据驱动的基本面深度分析
+priority: 8
+category: fundamental
+default_active: true
+
+required_tools:
+  - get_wind_fundamentals
+  - get_wind_holders
+  - get_wind_risk_metrics
+  - get_wind_events
+
+instructions: |
+  使用 Wind 数据对目标公司进行四维基本面分析：
+
+  1. **财务质量分析** (权重 30%)
+     - 使用 get_wind_fundamentals 获取 ROE、毛利率、现金流、负债率
+     - 评估财务健康度和盈利质量
+
+  2. **股东结构分析** (权重 20%)
+     - 使用 get_wind_holders 获取前十大股东、机构持仓变化
+     - 评估筹码集中度和主力动向
+
+  3. **风险指标分析** (权重 25%)
+     - 使用 get_wind_risk_metrics 获取 Beta、波动率、最大回撤
+     - 评估风险水平和投资性价比
+
+  4. **事件催化分析** (权重 25%)
+     - 使用 get_wind_events 获取公司事件
+     - 评估近期催化剂和风险事件
+
+  输出要求：
+  - fundamental_score: 0-100 分
+  - detailed_analysis: 各维度详细分析
+  - risk_warnings: 风险提示
+  - 根据评分调整 sentiment_score
+
+scoring:
+  excellent: 80-100
+  good: 60-79
+  average: 40-59
+  poor: 0-39

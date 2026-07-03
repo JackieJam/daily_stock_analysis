@@ -44,6 +44,9 @@ if os.getenv("GITHUB_ACTIONS") != "true" and os.getenv("USE_PROXY", "false").low
     proxy_url = f"http://{proxy_host}:{proxy_port}"
     os.environ["http_proxy"] = proxy_url
     os.environ["https_proxy"] = proxy_url
+    # 国内金融 API 不走代理
+    if os.getenv("NO_PROXY"):
+        os.environ["no_proxy"] = os.getenv("NO_PROXY")
 
 if os.getenv("DSA_PACKAGED_ALPHASIFT_IMPORT_PROBE") == "1":
     import importlib

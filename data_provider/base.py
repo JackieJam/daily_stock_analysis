@@ -1210,6 +1210,20 @@ class DataFetcherManager:
         else:
             logger.debug("[数据源初始化] 跳过未配置的 AlphaVantageFetcher")
 
+        # Wind 数据源（可选，需要 WIND_API_KEY 和 Node.js）
+        wind_api_key = (getattr(config, "wind_api_key", None) or "").strip()
+        wind_enabled = getattr(config, "enable_wind_fetcher", False)
+        if wind_enabled and wind_api_key:
+            from .wind_fetcher import WindFetcher
+            wind = WindFetcher()
+            if wind.is_available():
+                optional_fetchers.append(wind)
+                logger.info(f"[数据源初始化] WindFetcher 可用，已注册 (Priority {wind.priority})")
+            else:
+                logger.debug("[数据源初始化] WindFetcher 不可用，跳过")
+        else:
+            logger.debug("[数据源初始化] 跳过未配置的 WindFetcher")
+
         # 初始化数据源列表
         self._ensure_concurrency_guards()
         with self._fetchers_lock:

@@ -186,8 +186,17 @@ def get_tool_registry():
     from src.agent.tools.market_tools import ALL_MARKET_TOOLS
     from src.agent.tools.backtest_tools import ALL_BACKTEST_TOOLS
 
+    # Wind 工具按需加载（收费数据源，默认关闭）
+    from src.config import get_config as _get_cfg
+    _cfg = _get_cfg()
+    if getattr(_cfg, "enable_wind_fetcher", False):
+        from src.agent.tools.wind_tools import ALL_WIND_TOOLS
+    else:
+        ALL_WIND_TOOLS = []
+        logger.debug("[AgentFactory] Wind tools disabled (enable_wind_fetcher=False)")
+
     registry = ToolRegistry()
-    for tool_fn in ALL_DATA_TOOLS + ALL_ANALYSIS_TOOLS + ALL_SEARCH_TOOLS + ALL_MARKET_TOOLS + ALL_BACKTEST_TOOLS:
+    for tool_fn in ALL_DATA_TOOLS + ALL_ANALYSIS_TOOLS + ALL_SEARCH_TOOLS + ALL_MARKET_TOOLS + ALL_BACKTEST_TOOLS + ALL_WIND_TOOLS:
         registry.register(tool_fn)
 
     _TOOL_REGISTRY = registry

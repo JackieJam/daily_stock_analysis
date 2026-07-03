@@ -1,0 +1,31 @@
+name: wind_risk_check
+display_name: Wind 风险筛查
+description: Wind 数据驱动的风险筛查
+priority: 7
+category: risk
+default_active: true
+
+required_tools:
+  - get_wind_risk_metrics
+  - get_wind_events
+  - get_wind_holders
+
+instructions: |
+  使用 Wind 数据进行系统性风险筛查：
+
+  1. **波动风险**
+     - 使用 get_wind_risk_metrics 获取 Beta、年化波动率
+     - Beta > 1.5 或波动率 > 40% 标记为高风险
+
+  2. **事件风险**
+     - 使用 get_wind_events 获取 ST 标记、违规处罚、诉讼等
+     - 存在重大负面事件标记为高风险
+
+  3. **股东集中度风险**
+     - 使用 get_wind_holders 获取股权集中度
+     - 前十大流通股东持股 < 30% 标记为筹码分散风险
+
+  输出要求：
+  - risk_level: low/medium/high/extreme
+  - risk_items: 具体风险项列表
+  - recommended_action: 建议操作

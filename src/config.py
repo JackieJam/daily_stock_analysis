@@ -732,6 +732,10 @@ class Config:
     longbridge_oauth_client_id: Optional[str] = None
     stock_index_remote_update_enabled: bool = True
 
+    # === Wind 万得数据源 ===
+    wind_api_key: Optional[str] = None
+    enable_wind_fetcher: bool = False
+
     # === AlphaSift optional stock screening integration ===
     alphasift_enabled: bool = False
     alphasift_install_spec: str = DEFAULT_ALPHASIFT_INSTALL_SPEC
@@ -1636,6 +1640,8 @@ class Config:
             generation_backend_max_concurrency=generation_backend_max_concurrency,
             local_cli_backend_max_concurrency=local_cli_backend_max_concurrency,
             opencode_cli_model=opencode_cli_model,
+            wind_api_key=os.getenv('WIND_API_KEY') or None,
+            enable_wind_fetcher=os.getenv('ENABLE_WIND_FETCHER', 'false').lower() == 'true',
             litellm_model=litellm_model,
             litellm_fallback_models=litellm_fallback_models,
             llm_temperature=resolve_unified_llm_temperature(litellm_model),
