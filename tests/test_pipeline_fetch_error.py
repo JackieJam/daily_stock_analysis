@@ -48,8 +48,8 @@ class PipelineFetchErrorTestCase(unittest.TestCase):
         pipeline.fetcher_manager.get_daily_data.assert_not_called()
 
     def test_resolve_resume_target_date_normalizes_supported_a_share_formats(self):
-        with patch("src.core.pipeline.get_market_for_stock", return_value="cn") as mock_market, patch(
-            "src.core.pipeline.get_effective_trading_date",
+        with patch("src.core.pipeline_helpers.get_market_for_stock", return_value="cn") as mock_market, patch(
+            "src.core.pipeline_helpers.get_effective_trading_date",
             return_value=date(2026, 3, 27),
         ) as mock_target:
             for code in ("SH600519", "000001.SZ", "BJ920748"):

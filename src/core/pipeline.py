@@ -88,6 +88,27 @@ from src.core.trading_calendar import (
 from data_provider.us_index_mapping import is_us_stock_code
 from bot.models import BotMessage
 
+from src.core.pipeline_helpers import (
+    agent_dashboard_value,
+    attach_daily_market_context,
+    augment_historical_with_realtime,
+    coerce_daily_market_context_date,
+    compute_ma_status,
+    describe_volume_ratio,
+    extract_advice_text_from_dict,
+    is_agent_field_missing,
+    is_agent_placeholder_text,
+    mark_trend_fallback_source,
+    resolve_resume_target_date,
+    safe_to_dict,
+    summary_fallback_from_result,
+    trend_decision_fallback,
+    trend_label_fallback,
+    trend_score_fallback,
+    trend_signal_fallback,
+    without_runtime_prompt_context,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -1661,38 +1682,9 @@ class StockAnalysisPipeline:
                 self._daily_market_context_service_lock = service_lock
             return service_lock
 
-    @staticmethod
-    def _coerce_daily_market_context_date(value: Any) -> Optional[date]:
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, date):
-            return value
-        if isinstance(value, str):
-            try:
-                return date.fromisoformat(value[:10])
-            except ValueError:
-                return None
-        return None
-
-    @staticmethod
-    def _attach_daily_market_context(
-        target_context: Dict[str, Any],
-        daily_market_context: Optional[DailyMarketContext],
-        *,
-        report_language: str,
-    ) -> None:
-        """Attach only the safe daily market summary to runtime analysis context."""
-        if daily_market_context is None:
-            return
-        safe_context = daily_market_context.to_safe_dict()
-        prompt_section = format_daily_market_context_prompt_section(
-            safe_context,
-            report_language=report_language,
-        )
-        if not prompt_section:
-            return
-        target_context["daily_market_context"] = safe_context
-        target_context["daily_market_context_summary"] = prompt_section
+    # --- Delegated to src.core.pipeline_helpers (pure functions) ---
+    _coerce_daily_market_context_date = staticmethod(coerce_daily_market_context_date)
+    _attach_daily_market_context = staticmethod(attach_daily_market_context)
 
     def _agent_result_to_analysis_result(
         self,
@@ -1898,158 +1890,19 @@ class StockAnalysisPipeline:
             align_with_score=(previous_advice == current_advice),
         )
 
-    @staticmethod
-    def _agent_dashboard_value(
-        dash: Dict[str, Any],
-        nested_dashboard: Any,
-        key: str,
-        *,
-        scalar: bool = False,
-        allow_dict: bool = False,
-        expect_text: bool = False,
-    ) -> Any:
-        """Read a scalar from top-level agent payload, then nested dashboard fallback."""
-        value = dash.get(key) if isinstance(dash, dict) else None
-        if isinstance(nested_dashboard, dict) and StockAnalysisPipeline._is_agent_field_missing(
-            value,
-            scalar=scalar,
-            allow_dict=allow_dict,
-            expect_text=expect_text,
-        ):
-            nested_value = nested_dashboard.get(key)
-            if not StockAnalysisPipeline._is_agent_field_missing(
-                nested_value,
-                scalar=scalar,
-                allow_dict=allow_dict,
-                expect_text=expect_text,
-            ):
-                value = nested_value
-        return value
+    # --- Delegated to src.core.pipeline_helpers (pure functions) ---
+    _agent_dashboard_value = staticmethod(agent_dashboard_value)
+    _extract_advice_text_from_dict = staticmethod(extract_advice_text_from_dict)
+    _is_agent_placeholder_text = staticmethod(is_agent_placeholder_text)
+    _is_agent_field_missing = staticmethod(is_agent_field_missing)
 
-    @staticmethod
-    def _extract_advice_text_from_dict(raw_advice: dict) -> str:
-        for field in ("has_position", "no_position"):
-            if isinstance(raw_advice.get(field), str):
-                text = raw_advice[field].strip()
-                if not StockAnalysisPipeline._is_agent_placeholder_text(text):
-                    return text
-
-        for value in raw_advice.values():
-            if isinstance(value, str):
-                text = value.strip()
-                if not StockAnalysisPipeline._is_agent_placeholder_text(text):
-                    return text
-
-        return ""
-
-    @staticmethod
-    def _is_agent_placeholder_text(text: str) -> bool:
-        if not text:
-            return True
-        return text.lower() in {"n/a", "na", "none", "null", "unknown", "tbd"} or text in {
-            "未知",
-            "待补充",
-            "数据缺失",
-            "无",
-        }
-
-    @staticmethod
-    def _is_agent_field_missing(
-        value: Any,
-        *,
-        scalar: bool = False,
-        allow_dict: bool = False,
-        expect_text: bool = False,
-    ) -> bool:
-        if scalar and isinstance(value, dict):
-            if not allow_dict or not value:
-                return True
-            return not StockAnalysisPipeline._extract_advice_text_from_dict(value)
-        if value is None:
-            return True
-        if expect_text and scalar:
-            if not isinstance(value, str):
-                return True
-        if isinstance(value, str):
-            text = value.strip()
-            return StockAnalysisPipeline._is_agent_placeholder_text(text)
-        if isinstance(value, dict):
-            if scalar:
-                return not allow_dict
-            return not value
-        if scalar and isinstance(value, (list, tuple, set)):
-            return True
-        return False
-
-    @staticmethod
-    def _trend_score_fallback(trend_result: Optional[TrendAnalysisResult]) -> Optional[int]:
-        if trend_result is None:
-            return None
-        try:
-            score = int(getattr(trend_result, "signal_score", 0))
-        except (TypeError, ValueError):
-            return None
-        return score if score > 0 else None
-
-    @staticmethod
-    def _trend_label_fallback(
-        trend_result: Optional[TrendAnalysisResult],
-        report_language: str = "zh",
-    ) -> str:
-        if trend_result is None:
-            return ""
-        trend_status = getattr(trend_result, "trend_status", None)
-        value = getattr(trend_status, "value", None) or str(trend_status or "").strip()
-        if report_language != "en":
-            return value
-        return localize_trend_prediction(value, report_language)
-
-    @staticmethod
-    def _trend_signal_fallback(
-        trend_result: Optional[TrendAnalysisResult],
-        report_language: str = "zh",
-    ) -> str:
-        if trend_result is None:
-            return ""
-        buy_signal = getattr(trend_result, "buy_signal", None)
-        value = getattr(buy_signal, "value", None) or str(buy_signal or "").strip()
-        return localize_operation_advice(value, report_language)
-
-    @staticmethod
-    def _trend_decision_fallback(trend_result: Optional[TrendAnalysisResult]) -> Optional[str]:
-        if trend_result is None:
-            return None
-        signal_name = getattr(getattr(trend_result, "buy_signal", None), "name", "").lower()
-        return {
-            "strong_buy": "buy",
-            "buy": "buy",
-            "hold": "hold",
-            "wait": "hold",
-            "sell": "sell",
-            "strong_sell": "sell",
-        }.get(signal_name)
-
-    @staticmethod
-    def _mark_trend_fallback_source(result: AnalysisResult) -> None:
-        if "trend:fallback" in (result.data_sources or ""):
-            return
-        result.data_sources = (
-            f"{result.data_sources},trend:fallback"
-            if result.data_sources
-            else "trend:fallback"
-        )
-
-    @staticmethod
-    def _summary_fallback_from_result(result: AnalysisResult, report_language: str) -> str:
-        trend = (result.trend_prediction or "").strip()
-        advice = (result.operation_advice or "").strip()
-        if trend and advice:
-            if report_language == "en":
-                return f"Trend view: {trend}; action advice: {advice}."
-            if report_language == "ko":
-                return f"추세 결론: {trend}; 대응 전략: {advice}."
-            return f"趋势结论：{trend}；操作建议：{advice}。"
-        return ""
+    # --- Delegated to src.core.pipeline_helpers (pure functions) ---
+    _trend_score_fallback = staticmethod(trend_score_fallback)
+    _trend_label_fallback = staticmethod(trend_label_fallback)
+    _trend_signal_fallback = staticmethod(trend_signal_fallback)
+    _trend_decision_fallback = staticmethod(trend_decision_fallback)
+    _mark_trend_fallback_source = staticmethod(mark_trend_fallback_source)
+    _summary_fallback_from_result = staticmethod(summary_fallback_from_result)
 
     def _backfill_agent_dashboard_fields(
         self,
@@ -2207,120 +2060,24 @@ class StockAnalysisPipeline:
                 return int(match.group())
         return default
     
+    # --- Delegated to src.core.pipeline_helpers ---
     def _describe_volume_ratio(self, volume_ratio: float) -> str:
-        """
-        量比描述
-        
-        量比 = 当前成交量 / 过去5日平均成交量
-        """
-        if volume_ratio < 0.5:
-            return "极度萎缩"
-        elif volume_ratio < 0.8:
-            return "明显萎缩"
-        elif volume_ratio < 1.2:
-            return "正常"
-        elif volume_ratio < 2.0:
-            return "温和放量"
-        elif volume_ratio < 3.0:
-            return "明显放量"
-        else:
-            return "巨量"
+        return describe_volume_ratio(volume_ratio)
 
-    @staticmethod
-    def _compute_ma_status(close: float, ma5: float, ma10: float, ma20: float) -> str:
-        """
-        Compute MA alignment status from price and MA values.
-        Logic mirrors storage._analyze_ma_status (Issue #234).
-        """
-        close = close or 0
-        ma5 = ma5 or 0
-        ma10 = ma10 or 0
-        ma20 = ma20 or 0
-        if close > ma5 > ma10 > ma20 > 0:
-            return "多头排列 📈"
-        elif close < ma5 < ma10 < ma20 and ma20 > 0:
-            return "空头排列 📉"
-        elif close > ma5 and ma5 > ma10:
-            return "短期向好 🔼"
-        elif close < ma5 and ma5 < ma10:
-            return "短期走弱 🔽"
-        else:
-            return "震荡整理 ↔️"
+    _compute_ma_status = staticmethod(compute_ma_status)
 
     def _augment_historical_with_realtime(
         self, df: pd.DataFrame, realtime_quote: Any, code: str
     ) -> pd.DataFrame:
-        """
-        使用当日实时行情补齐历史 OHLCV，用于盘中 MA 计算。
-        Issue #234：技术指标使用实时价格，而不是沿用昨日收盘价。
-        """
-        if df is None or df.empty or 'close' not in df.columns:
-            return df
-        if realtime_quote is None:
-            return df
-        price = getattr(realtime_quote, 'price', None)
-        if price is None or not (isinstance(price, (int, float)) and price > 0):
-            return df
-
-        # 非交易日可跳过实时补齐；异常情况下保持失败开放。
-        enable_realtime_tech = getattr(
-            self.config, 'enable_realtime_technical_indicators', True
+        """Augment historical OHLCV with intraday real-time quote (delegated)."""
+        return augment_historical_with_realtime(
+            df,
+            realtime_quote,
+            code,
+            enable_realtime_technical_indicators=getattr(
+                self.config, 'enable_realtime_technical_indicators', True,
+            ),
         )
-        if not enable_realtime_tech:
-            return df
-        market = get_market_for_stock(code)
-        market_today = get_market_now(market).date()
-        if market and not is_market_open(market, market_today):
-            return df
-
-        last_val = df['date'].max()
-        last_date = (
-            last_val.date() if hasattr(last_val, 'date') else
-            (last_val if isinstance(last_val, date) else pd.Timestamp(last_val).date())
-        )
-        yesterday_close = float(df.iloc[-1]['close']) if len(df) > 0 else price
-        open_p = getattr(realtime_quote, 'open_price', None) or getattr(
-            realtime_quote, 'pre_close', None
-        ) or yesterday_close
-        high_p = getattr(realtime_quote, 'high', None) or price
-        low_p = getattr(realtime_quote, 'low', None) or price
-        vol = getattr(realtime_quote, 'volume', None) or 0
-        amt = getattr(realtime_quote, 'amount', None)
-        pct = getattr(realtime_quote, 'change_pct', None)
-
-        if last_date >= market_today:
-            # 使用实时收盘价更新最后一行；先复制，避免修改调用方传入的 df。
-            df = df.copy()
-            idx = df.index[-1]
-            df.loc[idx, 'close'] = price
-            if open_p is not None:
-                df.loc[idx, 'open'] = open_p
-            if high_p is not None:
-                df.loc[idx, 'high'] = high_p
-            if low_p is not None:
-                df.loc[idx, 'low'] = low_p
-            if vol:
-                df.loc[idx, 'volume'] = vol
-            if amt is not None:
-                df.loc[idx, 'amount'] = amt
-            if pct is not None:
-                df.loc[idx, 'pct_chg'] = pct
-        else:
-            # 追加一行虚拟的当日实时 K 线。
-            new_row = {
-                'code': code,
-                'date': market_today,
-                'open': open_p,
-                'high': high_p,
-                'low': low_p,
-                'close': price,
-                'volume': vol,
-                'amount': amt if amt is not None else 0,
-                'pct_chg': pct if pct is not None else 0,
-            }
-            new_df = pd.DataFrame([new_row])
-            df = pd.concat([df, new_df], ignore_index=True)
-        return df
 
     def _build_context_snapshot(
         self,
@@ -2649,57 +2406,11 @@ class StockAnalysisPipeline:
             )
             return "", None
 
-    @staticmethod
-    def _without_runtime_prompt_context(context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Return a shallow copy without runtime-only prompt context.
-
-        Market phase and AnalysisContextPack summaries are prompt inputs only.
-        P4 stores only the separately rendered public overview at snapshot top level.
-        """
-        sanitized = dict(context)
-        sanitized.pop("market_phase_context", None)
-        sanitized.pop("portfolio_context", None)
-        sanitized.pop("analysis_context_pack", None)
-        sanitized.pop("analysis_context_pack_summary", None)
-        sanitized.pop("daily_market_context_summary", None)
-        enhanced_context = sanitized.get("enhanced_context")
-        if isinstance(enhanced_context, dict):
-            enhanced_context = dict(enhanced_context)
-            enhanced_context.pop("daily_market_context_summary", None)
-            sanitized["enhanced_context"] = enhanced_context
-        return sanitized
-
+    # --- Delegated to src.core.pipeline_helpers (pure functions) ---
+    _without_runtime_prompt_context = staticmethod(without_runtime_prompt_context)
     _without_market_phase_context = _without_runtime_prompt_context
-
-    @staticmethod
-    def _resolve_resume_target_date(
-        code: str, current_time: Optional[datetime] = None
-    ) -> date:
-        """
-        Resolve the trading date used by checkpoint/resume checks.
-        """
-        market = get_market_for_stock(normalize_stock_code(code))
-        return get_effective_trading_date(market, current_time=current_time)
-
-    @staticmethod
-    def _safe_to_dict(value: Any) -> Optional[Dict[str, Any]]:
-        """
-        安全转换为字典
-        """
-        if value is None:
-            return None
-        if hasattr(value, "to_dict"):
-            try:
-                return value.to_dict()
-            except Exception:
-                return None
-        if hasattr(value, "__dict__"):
-            try:
-                return dict(value.__dict__)
-            except Exception:
-                return None
-        return None
+    _resolve_resume_target_date = staticmethod(resolve_resume_target_date)
+    _safe_to_dict = staticmethod(safe_to_dict)
 
     def _resolve_query_source(self, query_source: Optional[str] = None) -> str:
         """
