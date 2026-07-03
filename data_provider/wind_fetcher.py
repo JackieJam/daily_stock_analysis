@@ -2,45 +2,23 @@
 """
 Wind 万得数据源适配器
 
-通过 wind-mcp-skill CLI 获取 Wind 金融数据。
+通过 WindMCPClient（HTTP JSON-RPC）获取 Wind 金融数据。
 需要：
-1. Node.js 18+
-2. wind-mcp-skill CLI (wind-skills/skills/wind-mcp-skill/scripts/cli.mjs)
-3. WIND_API_KEY 环境变量
+1. WIND_API_KEY 环境变量
+2. requests 库（已在依赖中）
 """
 
 import json
 import logging
 import os
-import subprocess
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
 from data_provider.base import BaseFetcher
+from data_provider.wind_mcp_client import WindMCPClient, WindMCPError
 
 logger = logging.getLogger(__name__)
-
-
-def _resolve_default_skill_dir() -> Path:
-    """解析 wind-mcp-skill 目录"""
-    env_dir = os.environ.get("WIND_SKILL_DIR")
-    if env_dir:
-        return Path(env_dir)
-    # 从项目根目录查找
-    project_root = Path(__file__).parent.parent
-    local = project_root / "wind-skills" / "skills" / "wind-mcp-skill"
-    if local.exists():
-        return local.resolve()
-    # 尝试上级目录
-    parent = project_root.parent / "wind-skills" / "skills" / "wind-mcp-skill"
-    if parent.exists():
-        return parent.resolve()
-    return local
-
-
-_DEFAULT_SKILL_DIR = _resolve_default_skill_dir()
 
 
 def _to_windcode(stock_code: str) -> str:
@@ -74,138 +52,70 @@ def _to_windcode(stock_code: str) -> str:
 
 
 class WindFetcher(BaseFetcher):
-    """Wind 万得数据源"""
+    """Wind 万得数据源 — HTTP/JSON-RPC 模式（无 Node.js 依赖）"""
 
     name = "WindFetcher"
     priority = 1  # 高优先级
 
-    def __init__(self, skill_dir: Optional[Path] = None, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None):
         super().__init__()
-        self._skill_dir = skill_dir or _DEFAULT_SKILL_DIR
         self._api_key = api_key or os.environ.get("WIND_API_KEY")
-        self._available = None
+        self._client: Optional[WindMCPClient] = None
+        self._available: Optional[bool] = None
 
     def _check_available(self) -> bool:
-        """检查 wind-mcp-skill 是否可用"""
+        """检查 WindFetcher 是否可用"""
         if self._available is not None:
             return self._available
 
-        # 检查 skill 目录
-        cli_path = self._skill_dir / "scripts" / "cli.mjs"
-        if not cli_path.exists():
-            logger.warning(f"[WindFetcher] CLI 不存在: {cli_path}")
-            self._available = False
-            return False
-
-        # 检查 Node.js
-        try:
-            result = subprocess.run(
-                ["node", "--version"],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode != 0:
-                logger.warning("[WindFetcher] Node.js 不可用")
-                self._available = False
-                return False
-        except Exception:
-            logger.warning("[WindFetcher] Node.js 不可用")
-            self._available = False
-            return False
-
-        # 检查 API Key
         if not self._api_key:
             logger.warning("[WindFetcher] WIND_API_KEY 未配置")
             self._available = False
             return False
 
-        self._available = True
-        logger.info(f"[WindFetcher] 可用 (skill_dir={self._skill_dir})")
-        return True
+        try:
+            self._client = WindMCPClient(api_key=self._api_key)
+            self._available = True
+            logger.info("[WindFetcher] 可用 (HTTP JSON-RPC 模式)")
+            return True
+        except Exception as exc:
+            logger.warning("[WindFetcher] 初始化失败: %s", exc)
+            self._available = False
+            return False
 
     def is_available(self) -> bool:
         return self._check_available()
 
     def _call_wind(self, server_type: str, tool_name: str, params: Dict[str, Any]) -> Optional[Dict]:
-        """调用 Wind CLI"""
-        if not self._check_available():
+        """调用 Wind MCP 工具（通过 HTTP JSON-RPC）"""
+        if not self._check_available() or self._client is None:
             return None
-
-        cli_path = self._skill_dir / "scripts" / "cli.mjs"
-        cmd = [
-            "node", str(cli_path),
-            "call", server_type, tool_name,
-            json.dumps(params, ensure_ascii=False)
-        ]
 
         try:
-            env = {**os.environ, "WIND_API_KEY": self._api_key, "NODE_NO_WARNINGS": "1"}
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=30, env=env
+            return self._client.call(server_type, tool_name, params)
+        except WindMCPError as exc:
+            logger.warning(
+                "[WindFetcher] 调用失败 [%s] %s.%s: %s",
+                exc.code, server_type, tool_name, exc.message,
             )
-
-            if result.returncode != 0:
-                logger.warning(f"[WindFetcher] CLI 调用失败: {result.stderr[:200]}")
-                return None
-
-            # 解析 JSON 响应（可能跨多行）
-            output = result.stdout.strip()
-            # 找到 JSON 开始的位置（跳过警告等非 JSON 内容）
-            json_start = output.find('{')
-            if json_start == -1:
-                logger.warning("[WindFetcher] CLI 输出中未找到 JSON")
-                return None
-
-            # 尝试从 JSON 开始位置解析
-            json_str = output[json_start:]
-            try:
-                response = json.loads(json_str)
-            except json.JSONDecodeError:
-                # 如果直接解析失败，尝试逐行构建 JSON
-                lines = output[json_start:].split('\n')
-                json_lines = []
-                brace_count = 0
-                for line in lines:
-                    json_lines.append(line)
-                    brace_count += line.count('{') - line.count('}')
-                    if brace_count == 0 and json_lines:
-                        try:
-                            response = json.loads('\n'.join(json_lines))
-                            break
-                        except json.JSONDecodeError:
-                            continue
-                else:
-                    logger.warning("[WindFetcher] 无法解析 CLI 输出 JSON")
-                    return None
-
-            if response.get('isError'):
-                logger.warning(f"[WindFetcher] API 错误: {response.get('error')}")
-                return None
-
-            content = response.get('content', [])
-            if content and len(content) > 0:
-                text = content[0].get('text', '{}')
-                return json.loads(text)
-
             return None
-
-        except subprocess.TimeoutExpired:
-            logger.warning(f"[WindFetcher] CLI 调用超时: {server_type}.{tool_name}")
-            return None
-        except Exception as e:
-            logger.warning(f"[WindFetcher] CLI 调用异常: {e}")
+        except Exception as exc:
+            logger.warning(
+                "[WindFetcher] 调用异常: %s.%s: %s",
+                server_type, tool_name, exc,
+            )
             return None
 
     def _fetch_raw_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
         """获取日线 K 线数据"""
         windcode = _to_windcode(stock_code)
         begin_date = start_date.replace("-", "")
-        end_date = end_date.replace("-", "")
+        end_date_fmt = end_date.replace("-", "")
 
         data = self._call_wind("stock_data", "get_stock_kline", {
             "windcode": windcode,
             "begin_date": begin_date,
-            "end_date": end_date,
+            "end_date": end_date_fmt,
         })
 
         if not data:

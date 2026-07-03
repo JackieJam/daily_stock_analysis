@@ -45,7 +45,7 @@ def _handle_get_wind_fundamentals(stock_code: str) -> dict:
     """Get Wind financial fundamentals."""
     fetcher = _get_wind_fetcher()
     if not fetcher.is_available():
-        return {"error": "WindFetcher not available. Check WIND_API_KEY and Node.js."}
+        return {"error": "WindFetcher not available. Check WIND_API_KEY."}
 
     data = fetcher.get_fundamentals(stock_code)
     if not data:
